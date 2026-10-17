@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>XAUUSD AI Assist</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="symbol">XAUUSD</span>
+      <span id="price" class="price">—</span>
+      <span id="regime" class="badge">loading…</span>
+    </div>
+    <div class="tf" role="group" aria-label="Timeframe">
+      <button data-tf="15m" class="active">15m</button>
+      <button data-tf="1h">1h</button>
+      <button data-tf="4h">4h</button>
+    </div>
+    <div class="meta">
+      <span id="source"></span>
+      <span id="updated"></span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="chart-wrap">
+      <div id="chart"></div>
+      <canvas id="overlay"></canvas>
+      <div id="chart-error" class="chart-error" hidden></div>
+      <div class="legend">
+        <span><i class="sw ema20"></i>EMA 20</span>
+        <span><i class="sw ema50"></i>EMA 50</span>
+        <span><i class="sw ema200"></i>EMA 200</span>
+        <span><i class="sw zone"></i>Entry zone</span>
+        <span><i class="sw tp"></i>TP</span>
+        <span><i class="sw sl"></i>SL</span>
+      </div>
+    </section>
+
+    <aside class="side">
+      <div id="signal" class="card signal-card">
+        <div class="muted">Analysing…</div>
+      </div>
+      <div class="card">
+        <h3>Why</h3>
+        <ul id="why" class="why"></ul>
+      </div>
+      <div class="card bias">
+        <h3>Market context</h3>
+        <div id="context"></div>
+      </div>
+    </aside>
+
+    <section class="panels">
+      <nav class="tabs" role="tablist">
+        <button data-tab="votes" class="active">Strategies</button>
+        <button data-tab="news">News</button>
+        <button data-tab="calendar">Calendar</button>
+        <button data-tab="backtest">Backtest</button>
+      </nav>
+      <div id="tab-votes" class="tab active"></div>
+      <div id="tab-news" class="tab"></div>
+      <div id="tab-calendar" class="tab"></div>
+      <div id="tab-backtest" class="tab"><button id="run-bt" class="btn">Run backtest on loaded data</button><div id="bt"></div></div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    Signals are for information only, not financial advice. Trading leveraged gold carries a high risk of loss.
+  </footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>

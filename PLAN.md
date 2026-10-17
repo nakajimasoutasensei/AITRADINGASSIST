@@ -287,6 +287,21 @@ AITRADINGASSIST/
 
 ---
 
+### Progress
+
+- [x] Phase 0–1: data sources (yfinance, Twelve Data, MT5, CSV, synthetic), economic calendar, news feeds, dollar/yields
+- [x] Phase 2: live chart dashboard with entry zone, SL/TP lines, signal card, reasons, news, calendar
+- [x] Phase 3: 10 strategies, regime detector, bar-by-bar backtester with spread and partial take-profits
+- [~] Phase 4: news AI (Claude or keyword fallback) is in; the ML meta-model needs real multi-year data first
+- [ ] Phase 5: Telegram/Discord alerts, journal
+- [ ] Phase 6: paper trading on a demo account and tuning on real history
+- [ ] Phase 7: optional auto-execution
+
+MVP decisions (can be changed later): signals only, intraday (15m entries with 1h/4h trend),
+simple HTML/JS frontend served by FastAPI instead of Next.js, polling every 30 s instead of WebSockets.
+
+---
+
 ## 10. Risks & how we handle them
 
 | Risk | Mitigation |
