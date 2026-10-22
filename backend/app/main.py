@@ -17,11 +17,12 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import backtest
+from . import backtest, ml
+from .ai.analyst import analyst, build_snapshot
 from .config import ROOT, settings
 from .data.intermarket import get_intermarket
 from .data.providers import DataError, get_candles
-from .engine import EngineConfig, decide, votes_at
+from .engine import EngineConfig, decide, grade_for, plan_from_levels, time_block, votes_at
 from .features import build_features
 from .news.calendar import get_events, high_impact
 from .news.sentiment import get_news
@@ -118,6 +119,53 @@ def trade_status(x: Ctx, i: int, sig: dict) -> tuple[bool, str, int]:
     return True, f"TP{tp_hits} hit - stop moved to {'break-even' if tp_hits == 1 else 'TP1'}", x.n - 1
 
 
+def _live_cfg():
+    """With a trained ML model, the engine uses the model's looser candidate rules and lets the model decide."""
+    meta = ml.load()
+    if meta is None:
+        return CFG, None
+    return EngineConfig(min_agree=meta.min_agree, min_score=meta.min_score), meta
+
+
+_PUBLIC = ("status", "action", "confidence", "agrees_with_engine", "summary", "reasons", "risks",
+           "problems", "levels_ok", "model", "decided_at", "error", "zone_low", "zone_high", "sl", "tp1", "tp2", "tp3")
+
+
+def _public(v: dict | None) -> dict | None:
+    return None if v is None else {k: v[k] for k in _PUBLIC if k in v}
+
+
+def _apply_ai(x: Ctx, i: int, sig: dict, v: dict | None, cfg: EngineConfig) -> dict:
+    """Combine an engine signal with Claude's verdict: confirm, adjust the levels, or reject."""
+    sig["ai"] = _public(v) or {"status": "not reviewed"}
+    if not v or v.get("status") != "ok":
+        sig["ai_status"] = {"pending": "analysing", "queued": "analysing", "error": "error"}.get(
+            (v or {}).get("status"), "not reviewed")
+        return sig
+    if v["action"] != sig["direction"]:
+        sig["ai_status"] = "rejected"
+        return sig
+    sig["ai_status"] = "confirmed"
+    if v.get("levels_ok"):
+        d = BUY if v["action"] == "BUY" else -1
+        new = plan_from_levels(x, i, d, v["zone_low"], v["zone_high"], v["sl"], [v["tp1"], v["tp2"], v["tp3"]], cfg)
+        changed = any(abs(new[k] - sig[k]) > 0.05 for k in ("zone_low", "zone_high", "sl", "tp1", "tp2", "tp3"))
+        if changed:
+            sig["engine_levels"] = {k: sig[k] for k in ("zone_low", "zone_high", "entry", "sl", "tp1", "tp2", "tp3")}
+            sig.update(new)
+            sig["ai_status"] = "adjusted"
+    return sig
+
+
+def _ai_own_signal(x: Ctx, i: int, v: dict, cfg: EngineConfig) -> dict:
+    d = BUY if v["action"] == "BUY" else -1
+    sig = plan_from_levels(x, i, d, v["zone_low"], v["zone_high"], v["sl"], [v["tp1"], v["tp2"], v["tp3"]], cfg)
+    sig.update(score=float(v["confidence"]), grade=grade_for(v["confidence"]), strategies=[],
+               reasons=v.get("reasons", []), against=v.get("risks", []), source="ai",
+               ai=_public(v), ai_status="ai signal")
+    return sig
+
+
 # ---------------------------------------------------------------- routes
 
 
@@ -132,6 +180,8 @@ def status():
         "symbol": "XAUUSD",
         "provider": settings.data_provider,
         "news_model": "claude" if settings.anthropic_api_key else "keywords",
+        "ai_signal_mode": settings.ai_signal_mode if analyst.enabled else "off",
+        "ml_model": (m.report if (m := ml.load()) else None),
         "claude_model": settings.claude_model if settings.anthropic_api_key else None,
         "account_balance": settings.account_balance,
         "risk_percent": settings.risk_percent,
@@ -168,26 +218,61 @@ def analysis():
     news, inter, events = _context["news"], _context["intermarket"], _context["events"]
     hi_events = high_impact(events)
 
+    cfg, meta = _live_cfg()
+    ai_on = analyst.enabled
+    full_ai = ai_on and settings.ai_signal_mode == "full"
+
+    def ask(key: str, i: int, view: dict, candidate: dict | None) -> dict:
+        snap = build_snapshot(x, i, view, candidate, news, events, inter)
+        return analyst.submit(key, snap, x.v("close", i), x.v("atr", i))
+
     # Replay the last day the same way the backtest does (one trade at a time), so a signal keeps
     # its original zone / SL / TP instead of being recalculated on every new candle.
-    look = backtest.MAX_HOLD + CFG.zone_valid_bars
+    look = backtest.MAX_HOLD + cfg.zone_valid_bars
     first = max(backtest.WARMUP, last - look)
-    history = {i: v for i in range(max(0, first - CFG.vote_ttl_bars), last + 1) if (v := votes_at(x, i))}
-    now_view = decide(x, last, history, CFG, news["bias"], inter["bias"], hi_events)
+    history = {i: v for i in range(max(0, first - cfg.vote_ttl_bars), last + 1) if (v := votes_at(x, i))}
+    now_view = decide(x, last, history, cfg, news["bias"], inter["bias"], hi_events, meta)
     active = None
     i = first
     while i <= last:
-        a = now_view if i == last else decide(x, i, history, CFG, news["bias"], inter["bias"], hi_events)
-        if not a["signal"]:
+        a = now_view if i == last else decide(x, i, history, cfg, news["bias"], inter["bias"], hi_events, meta)
+        t_key = x.index[i].isoformat()
+        sig = None
+        if a["signal"]:
+            sig = dict(a["signal"])
+            if ai_on:
+                v = analyst.get("sig:" + t_key)
+                if v is None and trade_status(x, i, sig)[0]:  # only ask about signals that are still live
+                    v = ask("sig:" + t_key, i, a, sig)
+                sig = _apply_ai(x, i, sig, v, cfg)
+        elif full_ai:
+            v = analyst.get("scan:" + t_key)
+            if v and v.get("status") == "ok" and v["action"] in ("BUY", "SELL") and v.get("levels_ok"):
+                sig = _ai_own_signal(x, i, v, cfg)
+        if sig is None:
             i += 1
             continue
-        sig = dict(a["signal"])
+        sig["created"] = t_key
+        if sig.get("ai_status") == "rejected":
+            sig.update(status="rejected by the AI analyst", open=False)
+            active = sig
+            i += cfg.vote_ttl_bars  # the same setup would come back on the next candles: skip it
+            continue
         still_open, text, end = trade_status(x, i, sig)
-        sig.update(created=x.index[i].isoformat(), status=text, open=still_open)
+        sig.update(status=text, open=still_open)
         active = sig  # the newest signal wins; a finished one is still shown until a new one appears
         if still_open:
             break
         i = end + 1
+
+    # full mode: no live trade -> ask Claude to look for one on the newest candle
+    ai_scan = None
+    if full_ai and not (active and active["open"]):
+        key = "scan:" + x.index[last].isoformat()
+        ai_scan = analyst.get(key)
+        if ai_scan is None and now_view["votes"] and not time_block(x.index[last] + pd.Timedelta(minutes=15)):
+            ai_scan = ask(key, last, now_view, None)
+    now_view.pop("ml_features", None)
 
     levels = {k: round(x.v(c, last), 2) for k, c in (
         ("prev_day_high", "pd_high"), ("prev_day_low", "pd_low"), ("asia_high", "asia_hi"),
@@ -198,6 +283,9 @@ def analysis():
     return {
         **now_view,
         "active_signal": active,
+        "ai_scan": _public(ai_scan),
+        "ai_mode": settings.ai_signal_mode if ai_on else "off",
+        "ml_model": meta.report if meta else None,
         "levels": levels,
         "news_bias": news["bias"],
         "intermarket": inter,

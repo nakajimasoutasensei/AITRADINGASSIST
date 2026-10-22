@@ -127,7 +127,9 @@ def decide(
     news_bias: float = 0.0,
     intermarket_bias: float = 0.0,
     events: list[dict] | None = None,
+    meta=None,
 ) -> dict:
+    """Analyse bar i. `meta` is an optional trained ML model (see ml.py) that must also approve the trade."""
     cfg = cfg or EngineConfig()
     ts = x.index[i]
     reg = regime(x, i)
@@ -201,9 +203,49 @@ def decide(
         strategies=[v.strategy for v in agreeing],
         reasons=[v.reason for v in agreeing],
         against=[v.reason for v in opposing],
+        source="engine",
     )
+    feats = signal_features(x, i, direction, votes, reg, score, sig["risk_per_oz"])
+    result["ml_features"] = feats
+    if meta is not None:
+        p = meta.probability(feats)
+        sig["ml_probability"] = round(100 * p, 1)
+        if p < meta.threshold:
+            result["blocked"] = [f"ML model: {p:.0%} chance of reaching TP1 (needs {meta.threshold:.0%})"]
+            result["ml_rejected"] = sig
+            return result
     result["signal"] = sig
     return result
+
+
+REGIMES = ("trend_up", "trend_down", "range", "volatile")
+
+
+def signal_features(x: Ctx, i: int, direction: int, votes: list[Vote], reg: str, score: float, risk: float) -> dict:
+    """Numbers describing a candidate trade, used by the ML model. Signed so that '+' means 'in favour'."""
+    atr, c = x.v("atr", i), x.v("close", i)
+    ts = x.index[i]
+    agree = {v.strategy: v.confidence for v in votes if v.direction == direction}
+    against = {v.strategy: v.confidence for v in votes if v.direction != direction}
+    f = {"dir": float(direction), "score": score, "risk_atr": risk / atr if atr else np.nan,
+         "n_agree": float(len(agree)), "n_against": float(len(against))}
+    for s in STRATEGIES:
+        f[f"v_{s.name}"] = agree.get(s.name, 0.0) - against.get(s.name, 0.0)
+    for r in REGIMES:
+        f[f"reg_{r}"] = float(reg == r)
+    f["with_trend"] = float(direction * (1 if reg == "trend_up" else -1 if reg == "trend_down" else 0))
+    hour = ts.hour + ts.minute / 60
+    f["hour_sin"], f["hour_cos"] = math.sin(2 * math.pi * hour / 24), math.cos(2 * math.pi * hour / 24)
+    f["weekday"] = float(ts.weekday())
+    for col in ("atr_pct", "adx", "h1_adx", "h4_adx"):
+        f[col] = x.v(col, i)
+    f["rsi_dir"] = (x.v("rsi", i) - 50) * direction
+    f["h1_rsi_dir"] = (x.v("h1_rsi", i) - 50) * direction
+    f["macd_dir"] = x.v("macd_hist", i) / atr * direction if atr else np.nan
+    for col in ("ema50", "ema200", "vwap", "h1_ema50", "h4_ema200", "pd_high", "pd_low", "asia_hi", "asia_lo"):
+        v = x.v(col, i)
+        f[f"d_{col}"] = direction * (c - v) / atr if ok(v) and atr else np.nan
+    return {k: float(v) for k, v in f.items()}
 
 
 def build_trade(x: Ctx, i: int, direction: int, agreeing: list[Vote], cfg: EngineConfig) -> dict | None:
@@ -258,6 +300,14 @@ def build_trade(x: Ctx, i: int, direction: int, agreeing: list[Vote], cfg: Engin
         if near:
             tps[0] = max(near) + 0.05 * atr
 
+    return plan_from_levels(x, i, direction, z_lo, z_hi, sl, tps, cfg)
+
+
+def plan_from_levels(x: Ctx, i: int, direction: int, z_lo: float, z_hi: float, sl: float,
+                     tps: list[float], cfg: EngineConfig) -> dict:
+    """Entry = middle of the zone; lot size from the account risk settings."""
+    entry = (z_lo + z_hi) / 2
+    risk = abs(entry - sl)
     risk_usd = settings.account_balance * settings.risk_percent / 100
     lot = _round_lot(risk_usd / (risk * settings.contract_size))
     valid_until = x.index[i] + timedelta(minutes=15 * (cfg.zone_valid_bars + 1))

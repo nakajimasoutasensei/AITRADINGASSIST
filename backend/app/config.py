@@ -23,7 +23,10 @@ class Settings:
     mt5_symbol: str = os.getenv("MT5_SYMBOL", "XAUUSD").strip()
     mt5_utc_offset: float = _float("MT5_UTC_OFFSET", 0.0)
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    claude_model: str = os.getenv("CLAUDE_MODEL", "claude-opus-5-5").strip()
+    claude_model: str = os.getenv("AI_MODEL", "claude-opus-5-5").strip()
+    claude_effort: str = os.getenv("AI_EFFORT", "medium").strip().lower()
+    # off = engine only; review = Claude checks every engine signal; full = Claude may also find its own trades
+    ai_signal_mode: str = os.getenv("AI_SIGNAL_MODE", "review").strip().lower()
     account_balance: float = _float("ACCOUNT_BALANCE", 1000.0)
     risk_percent: float = _float("RISK_PERCENT", 1.0)
     spread: float = _float("SPREAD", 0.30)

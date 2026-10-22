@@ -115,7 +115,9 @@ def simulate(x: Ctx, i: int, sig: dict, spread: float) -> tuple[Trade, int]:
     return t, k
 
 
-def run(df: pd.DataFrame, cfg: EngineConfig | None = None) -> dict:
+def run(df: pd.DataFrame, cfg: EngineConfig | None = None, meta=None) -> dict:
+    """meta: optional trained ML model. Note: testing it on the data it was trained on is too optimistic;
+    the honest numbers are in the model's own report (test period it never saw)."""
     cfg = cfg or EngineConfig()
     f = build_features(df)
     x = Ctx(f)
@@ -126,7 +128,7 @@ def run(df: pd.DataFrame, cfg: EngineConfig | None = None) -> dict:
         if i not in history:
             i += 1
             continue
-        a = decide(x, i, history, cfg)
+        a = decide(x, i, history, cfg, meta=meta)
         sig = a["signal"]
         if sig is None:
             i += 1
@@ -179,18 +181,39 @@ def main() -> None:  # pragma: no cover - CLI
 
     p = argparse.ArgumentParser(description="Backtest the XAUUSD signal engine")
     p.add_argument("--provider", default=None)
+    p.add_argument("--utc-offset", type=float, default=None,
+                   help="hours the CSV time is ahead of UTC (MT5 broker time); default MT5_UTC_OFFSET")
     p.add_argument("--csv", default=None, help="CSV with time,open,high,low,close[,volume] in UTC")
     p.add_argument("--min-score", type=float, default=None)
     p.add_argument("--min-agree", type=int, default=None)
+    p.add_argument("--ml", action="store_true", help="also filter with the trained ML model (models/meta_model.joblib)")
     a = p.parse_args()
-    df = load_csv(a.csv) if a.csv else get_candles(a.provider)
+    if a.utc_offset is None:
+        from .config import settings
+
+        a.utc_offset = settings.mt5_utc_offset if a.csv else 0.0
+    df = load_csv(a.csv, a.utc_offset) if a.csv else get_candles(a.provider)
     cfg = EngineConfig()
     if a.min_score is not None:
         cfg.min_score = a.min_score
     if a.min_agree is not None:
         cfg.min_agree = a.min_agree
-    res = run(df, cfg)
+    meta = None
+    if a.ml:
+        from .ml import load
+
+        meta = load()
+        if meta is None:
+            p.error("No trained model. Run: python -m backend.app.ml --csv your_data.csv")
+        cfg.min_agree, cfg.min_score = meta.min_agree, meta.min_score
+    res = run(df, cfg, meta)
     print(f"Data: {res['start']} -> {res['end']} ({res['bars']} bars of 15m)")
+    if meta is not None:
+        r = meta.report
+        print("WARNING: if the ML model was trained on this same data, these results are far too optimistic.")
+        print(f"  Honest result (period the model never saw, from {r.get('test_period_from')}):")
+        print(f"  all candidates:    {r.get('test_all_candidates')}")
+        print(f"  model-approved:    {r.get('test_model_approved')}")
     s = res["stats"]
     for k in ("all", "A+", "A", "B"):
         print(f"{k:>4}: {s[k]}")

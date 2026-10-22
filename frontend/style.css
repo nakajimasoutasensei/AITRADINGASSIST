@@ -79,6 +79,17 @@ button { font: inherit; color: inherit; }
 .scorebar { height: 6px; background: var(--panel-2); border-radius: 3px; margin: 6px 0 12px; overflow: hidden; }
 .scorebar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--warn), var(--buy)); }
 .blocked li { color: var(--warn); }
+.signal-card.rejected { box-shadow: inset 4px 0 0 var(--muted); }
+.kv.dim { opacity: .45; }
+.small { font-size: 12px; }
+.ai-box { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: var(--panel-2); border-left: 3px solid var(--muted); }
+.ai-box p { margin: 6px 0; }
+.ai-box .why { margin-top: 6px; }
+.ai-box.yes { border-left-color: var(--buy); }
+.ai-box.no { border-left-color: var(--sell); }
+.ai-box.wait { border-left-color: var(--warn); }
+.ai-head { display: flex; justify-content: space-between; gap: 8px; }
+.ai-conf { font-weight: 700; color: var(--gold); }
 
 .why { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .why li { display: flex; gap: 8px; }

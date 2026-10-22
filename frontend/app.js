@@ -14,6 +14,11 @@
   const localTime = (iso) => new Date(iso).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
 
   const state = { tf: "15m", analysis: null, priceLines: [], lastBarTime: null, trades: [], candles: [] };
+  // the signal to draw on the chart (none when the AI analyst rejected it)
+  const drawable = () => {
+    const s = state.analysis && state.analysis.active_signal;
+    return s && s.ai_status !== "rejected" ? s : null;
+  };
 
   // ------------------------------------------------------------------ chart
   const el = $("#chart");
@@ -31,7 +36,7 @@
     // keep the signal's SL and TP levels inside the visible price range
     autoscaleInfoProvider: (original) => {
       const res = original();
-      const sig = state.analysis && state.analysis.active_signal;
+      const sig = drawable();
       if (!res || !sig) return res;
       const lv = [sig.sl, sig.tp1, sig.tp2, sig.tp3, sig.zone_low, sig.zone_high];
       res.priceRange.minValue = Math.min(res.priceRange.minValue, ...lv);
@@ -57,7 +62,7 @@
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
-    const sig = state.analysis && state.analysis.active_signal;
+    const sig = drawable();
     if (!sig || !state.candles.length) return requestAnimationFrame(drawOverlay);
     const plotRight = w - chart.priceScale("right").width();
     const y1 = candles.priceToCoordinate(sig.zone_high);
@@ -81,7 +86,8 @@
       ctx.fillStyle = buy ? css("--buy") : css("--sell");
       ctx.font = "600 11px system-ui, sans-serif";
       const label = `${sig.direction} ZONE ${fmt(sig.zone_low)}–${fmt(sig.zone_high)}`;
-      const lx = Math.max(4, Math.min(x1 + 6, plotRight - ctx.measureText(label).width - 6));
+      // leave ~70px free at the right edge for the price-line tags (Entry, TP1, SL ...)
+      const lx = Math.max(4, Math.min(x1 + 6, plotRight - ctx.measureText(label).width - 70));
       ctx.fillText(label, lx, top - 5);
     }
     requestAnimationFrame(drawOverlay);
@@ -173,7 +179,7 @@
       renderContext(a);
       renderVotes(a);
       renderCalendar(a.upcoming_events || []);
-      setPriceLines(a.active_signal, a.levels);
+      setPriceLines(drawable(), a.levels);
       const reg = $("#regime");
       reg.textContent = { trend_up: "Trending up", trend_down: "Trending down", range: "Ranging", volatile: "Very volatile" }[a.regime] || a.regime;
       reg.className = `badge ${a.regime}`;
@@ -190,29 +196,65 @@
   }
 
   // ------------------------------------------------------------------ render
+  const AI_LABEL = {
+    confirmed: ["yes", "AI confirmed this trade"],
+    adjusted: ["yes", "AI confirmed and adjusted the levels"],
+    rejected: ["no", "AI rejected this trade"],
+    analysing: ["wait", "AI is analysing…"],
+    error: ["no", "AI analyst unavailable — strategies only"],
+    "not reviewed": ["idle", "Not reviewed by AI"],
+    "ai signal": ["yes", "Trade found by the AI analyst"],
+  };
+
+  function aiBlock(s) {
+    if (!s.ai_status) return "";
+    const [cls, label] = AI_LABEL[s.ai_status] || ["idle", s.ai_status];
+    const v = s.ai || {};
+    let body = "";
+    if (v.status === "ok") {
+      const list = (items, c) => (items || []).map((t) => `<li class="${c}">${esc(t)}</li>`).join("");
+      body = `<p>${esc(v.summary)}</p><ul class="why">${list(v.reasons, "yes")}${list(v.risks, "no")}</ul>
+        ${v.problems && v.problems.length ? `<p class="muted">Levels kept from strategies: ${esc(v.problems.join("; "))}</p>` : ""}
+        <div class="muted small">${esc(v.model || "")}</div>`;
+    } else if (v.status === "error") {
+      body = `<p class="muted small">${esc(v.error)}</p>`;
+    }
+    const conf = v.status === "ok" ? `<span class="ai-conf">${v.confidence}%</span>` : "";
+    return `<div class="ai-box ${cls}"><div class="ai-head"><b>${label}</b>${conf}</div>${body}</div>`;
+  }
+
   function renderSignal(a) {
     const s = a.active_signal;
     const box = $("#signal");
     if (!s) {
       box.className = "card signal-card";
       const items = (a.blocked || []).map((b) => `<li>${esc(b)}</li>`).join("");
+      const scan = a.ai_scan;
+      let scanText = "";
+      if (scan && (scan.status === "pending" || scan.status === "queued")) scanText = '<div class="ai-box wait"><b>AI is scanning the market…</b></div>';
+      else if (scan && scan.status === "ok") scanText = `<div class="ai-box idle"><b>AI: ${scan.action === "NO_TRADE" ? "no trade right now" : esc(scan.action)}</b><p>${esc(scan.summary)}</p></div>`;
       box.innerHTML = `
         <div class="sig-head"><span class="sig-dir">No trade</span><span class="grade">—</span></div>
-        <p class="muted">Waiting for enough strategies to agree. Current reasons:</p>
-        <ul class="blocked">${items || "<li>No setup on the latest candle</li>"}</ul>`;
+        <p class="muted">Waiting for a good setup. Current reasons:</p>
+        <ul class="blocked">${items || "<li>No setup on the latest candle</li>"}</ul>${scanText}`;
       return;
     }
     const dir = s.direction.toLowerCase();
-    box.className = `card signal-card ${dir}`;
+    const rejected = s.ai_status === "rejected";
+    box.className = `card signal-card ${rejected ? "rejected" : dir}`;
+    const heading = rejected ? "Rejected signal — no trade" : s.open ? "Active signal" : "Last signal (finished) — waiting for a new setup";
+    const who = s.source === "ai" ? "found by the AI analyst" : `${s.strategies.length} strategies agree`;
+    const ml = s.ml_probability != null ? ` · ML: ${fmt(s.ml_probability, 0)}% chance of TP1` : "";
     box.innerHTML = `
-      <div class="muted">${s.open ? "Active signal" : "Last signal (finished) — waiting for a new setup"} · ${localTime(s.created)}</div>
+      <div class="muted">${heading} · ${localTime(s.created)}</div>
       <div class="sig-head">
-        <span class="sig-dir ${dir}">${s.direction}</span>
+        <span class="sig-dir ${rejected ? "" : dir}">${rejected ? "<s>" + s.direction + "</s>" : s.direction}</span>
         <span class="grade g-${s.grade.replace("+", "p")}" title="Signal grade">${s.grade}</span>
       </div>
-      <div class="muted">Score ${fmt(s.score, 0)}/100 · ${s.strategies.length} strategies agree</div>
+      <div class="muted">Score ${fmt(s.score, 0)}/100 · ${who}${ml}</div>
       <div class="scorebar"><i style="width:${Math.min(100, s.score)}%"></i></div>
-      <dl class="kv">
+      ${aiBlock(s)}
+      <dl class="kv${rejected ? " dim" : ""}">
         <dt>Entry zone</dt><dd class="zone">${fmt(s.zone_low)} – ${fmt(s.zone_high)}</dd>
         <dt>Entry (limit)</dt><dd>${fmt(s.entry)}</dd>
         <dt>Stop loss</dt><dd class="sl">${fmt(s.sl)}</dd>
@@ -223,6 +265,7 @@
         <dt>Lot size</dt><dd>${fmt(s.lot)} lot (≈ $${fmt(s.risk_usd, 0)} risk)</dd>
         <dt>Valid until</dt><dd>${localTime(s.valid_until)}</dd>
       </dl>
+      ${s.engine_levels ? `<div class="muted small">Strategy levels before AI: SL ${fmt(s.engine_levels.sl)} · TP1 ${fmt(s.engine_levels.tp1)} · zone ${fmt(s.engine_levels.zone_low)}–${fmt(s.engine_levels.zone_high)}</div>` : ""}
       <div class="status">Status: <b>${esc(s.status)}</b></div>`;
   }
 
@@ -310,10 +353,18 @@
       const head = "<tr><th></th><th>Signals</th><th>Trades</th><th>Win rate (TP1)</th><th>Full losses</th><th>Avg</th><th>Total</th><th>Profit factor</th></tr>";
       const grades = ["all", "A+", "A", "B"].map((g) => statRow(g === "all" ? "All signals" : `Grade ${g}`, s[g])).join("");
       const strat = Object.entries(s.by_strategy).map(([k, v]) => statRow(k, v)).join("");
+      const m = state.ml;
+      const mlHtml = m ? `<h3 style="margin-top:14px">ML model — test on unseen data (${new Date(m.test_period_from).toLocaleDateString()} → ${new Date(m.data_to).toLocaleDateString()})</h3>
+        <div class="table-scroll"><table><thead>${head}</thead><tbody>
+        ${statRow("All candidates", { signals: m.test_all_candidates.trades, ...m.test_all_candidates, full_losses_pct: null })}
+        ${statRow("Approved by model", { signals: m.test_model_approved.trades, ...m.test_model_approved, full_losses_pct: null })}
+        </tbody></table></div><p class="muted">AUC ${m.test_auc ?? "—"} (0.5 = no skill) · threshold ${fmt(m.threshold * 100, 0)}% · trained on ${m.candidates} candidate trades.</p>` :
+        `<p class="muted">No ML model trained yet. Run <code>python -m backend.app.ml --csv your_history.csv</code>.</p>`;
       out.innerHTML = `
         <p class="muted">${new Date(r.start).toLocaleDateString()} → ${new Date(r.end).toLocaleDateString()} · ${r.bars} candles · max drawdown ${fmt(s.all.max_drawdown_r, 1)}R.
         Arrows on the chart show each trade. Results include spread; news filters are not applied in backtests.</p>
         <div class="table-scroll"><table><thead>${head}</thead><tbody>${grades}</tbody></table></div>
+        ${mlHtml}
         <h3 style="margin-top:14px">By strategy (trades where it agreed)</h3>
         <div class="table-scroll"><table><thead>${head}</thead><tbody>${strat}</tbody></table></div>`;
     } catch (e) {
@@ -338,7 +389,9 @@
     try {
       const st = await api("/api/status");
       strategyList = st.strategies;
-      $("#source").textContent = `Data: ${st.provider} · News AI: ${st.news_model}`;
+      state.ml = st.ml_model;
+      const mlText = st.ml_model ? `ML filter on (test win rate ${st.ml_model.test_model_approved.win_rate_tp1 ?? "—"}%)` : "ML filter off";
+      $("#source").textContent = `Data: ${st.provider} · AI signals: ${st.ai_signal_mode} · ${mlText}`;
     } catch (_) { /* shown elsewhere */ }
     await loadCandles(true);
     await loadAnalysis();

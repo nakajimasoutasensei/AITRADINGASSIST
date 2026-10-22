@@ -55,3 +55,39 @@ def test_news_bias_sign():
     bear = [{"time": now, "impact": "bearish", "strength": 1.0}]
     assert news_bias(bull) > 0 > news_bias(bear)
     assert news_bias([]) == 0
+
+
+def test_load_mt5_export(tmp_path):
+    from backend.app.data.providers import load_csv
+
+    rows = ["<DATE>\t<TIME>\t<OPEN>\t<HIGH>\t<LOW>\t<CLOSE>\t<TICKVOL>\t<VOL>\t<SPREAD>"]
+    t = pd.Timestamp("2025-03-03 02:00")
+    for k in range(8):  # eight 5-minute bars -> three 15-minute bars (last partial)
+        ts = t + pd.Timedelta(minutes=5 * k)
+        rows.append(f"{ts:%Y.%m.%d}\t{ts:%H:%M:%S}\t{2900 + k}\t{2901 + k}\t{2899 + k}\t{2900.5 + k}\t{100 + k}\t0\t20")
+    p = tmp_path / "XAUUSD_M5.csv"
+    p.write_text("\n".join(rows))
+    df = load_csv(str(p), utc_offset_hours=2)
+    assert str(df.index[0]) == "2025-03-03 00:00:00+00:00"  # 02:00 broker time = 00:00 UTC
+    assert df.iloc[0]["open"] == 2900 and df.iloc[0]["high"] == 2903 and df.iloc[0]["close"] == 2902.5
+    assert df.iloc[0]["volume"] == 100 + 101 + 102
+
+
+def test_load_plain_csv(tmp_path):
+    from backend.app.data.providers import load_csv
+
+    p = tmp_path / "x.csv"
+    p.write_text("time,open,high,low,close\n2025-03-03 00:00,1,2,0.5,1.5\n2025-03-03 00:15,1.5,3,1,2\n")
+    df = load_csv(str(p))
+    assert len(df) == 2 and df.iloc[1]["high"] == 3
+
+
+def test_load_csv_date_formats(tmp_path):
+    from backend.app.data.providers import load_csv
+
+    p = tmp_path / "ms.csv"
+    p.write_text("datetime,open,high,low,close\n2025-03-03 00:00:00.000,1,2,0.5,1.5\n")
+    assert str(load_csv(str(p)).index[0]) == "2025-03-03 00:00:00+00:00"
+    p = tmp_path / "duka.csv"
+    p.write_text("Gmt time,Open,High,Low,Close,Volume\n04.03.2025 00:00:00.000,1,2,0.5,1.5,10\n")
+    assert str(load_csv(str(p)).index[0]) == "2025-03-04 00:00:00+00:00"  # 4 March, not 3 April

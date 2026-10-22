@@ -37,7 +37,9 @@ uvicorn backend.app.main:app --port 8000
 | `TWELVEDATA_API_KEY` | needed for `twelvedata` |
 | `MT5_SYMBOL`, `MT5_UTC_OFFSET` | broker symbol name (e.g. `XAUUSD`, `XAUUSDm`) and the broker server's UTC offset in hours |
 | `ANTHROPIC_API_KEY` | optional: lets Claude read the news. Without it a simple keyword model is used |
-| `CLAUDE_MODEL` | default `claude-opus-5-5` |
+| `AI_MODEL` | Claude model for news and signals, default `claude-opus-5-5` |
+| `AI_EFFORT` | how hard Claude thinks per decision: `low`, `medium` (default), `high` |
+| `AI_SIGNAL_MODE` | `review` (default): Claude checks every strategy signal · `full`: Claude may also find its own trades · `off` |
 | `ACCOUNT_BALANCE`, `RISK_PERCENT` | used for the lot-size calculator (default $1000, 1%) |
 | `SPREAD` | spread in $ added to stop losses and charged in backtests (default 0.30) |
 
@@ -57,6 +59,32 @@ uvicorn backend.app.main:app --port 8000
 7. **Trade plan**: entry zone = overlap of the agreeing zones; SL beyond the structure that would prove the
    idea wrong (+ buffer + spread); TP1 = 1R (or just before a nearby level), TP2 = 2R, TP3 = 3R.
    Plan: close 50% at TP1 and move SL to entry, close 30% at TP2, let 20% run to TP3.
+8. **ML model** (once trained, see below): every candidate gets a probability of reaching TP1 learned from
+   history. Only candidates above the model's threshold become signals.
+9. **Claude, the AI analyst** (with `ANTHROPIC_API_KEY`): gets a snapshot of the market (candles on
+   15m/1h/4h/daily, indicators, levels, all strategy votes, the proposed trade, news, calendar, dollar/yields)
+   and decides: **confirm**, **adjust** the zone/SL/TP, or **reject**. In `full` mode it may also propose its
+   own trade on a new candle when strategies are active. Its levels must pass safety checks (right order,
+   stop 0.6–4 ATR away, zone near price) or the strategy levels are kept. Each signal is sent to Claude only
+   once; answers are saved in `backend/cache/ai_verdicts.json`.
+
+   Cost: one decision is roughly 5–8k input tokens plus the answer. In `review` mode that is a few calls a
+   day; `full` mode can make up to one call per 15-minute candle.
+
+## Train the ML model
+
+```bash
+python -m backend.app.ml --csv xauusd_m15.csv   # several years of history recommended
+```
+
+It collects every candidate trade in the history, simulates it, and trains a gradient-boosting model
+on the oldest 70%. It then reports results on the newest 30%, which the model never saw. That report
+(also shown in the dashboard's Backtest tab) is the number to trust. The model is saved to
+`models/meta_model.joblib` and used automatically. With only ~60 days of free data it will usually
+refuse to train or show no real skill (AUC ≈ 0.5).
+
+To export history from MT5: open the *Symbols* window (Ctrl+U) → *Bars* tab → choose XAUUSD, M15 and a
+date range → *Request* → *Export Bars*. The file uses broker time; keep `MT5_UTC_OFFSET` in mind.
 
 ## Backtest from the command line
 
@@ -85,6 +113,8 @@ backend/app/
   strategies/            the 10 strategies + their weights per market type
   engine.py              regime, voting, filters, entry zone / SL / TP / lot size
   backtest.py            bar-by-bar simulation with spread and partial take-profits
+  ml.py                  ML model that learns which setups reach TP1
+  ai/analyst.py          Claude as AI analyst: confirms / adjusts / rejects / finds signals
   news/calendar.py       economic calendar (Forex Factory feed)
   news/sentiment.py      headlines + Claude / keyword sentiment -> news bias
   main.py                FastAPI server

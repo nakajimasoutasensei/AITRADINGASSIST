@@ -99,19 +99,30 @@ def fetch_mt5(symbol: str | None = None, bars: int = 6000) -> pd.DataFrame:
         mt5.shutdown()
 
 
-def load_csv(path: str) -> pd.DataFrame:
-    """CSV with columns time/datetime/date, open, high, low, close[, volume]. Times assumed UTC."""
-    df = pd.read_csv(path)
-    df.columns = [c.strip().lower() for c in df.columns]
-    tcol = next((c for c in ("time", "datetime", "date", "timestamp", "gmt time") if c in df.columns), None)
-    if tcol is None:
-        raise DataError("CSV needs a time/datetime column")
-    idx = pd.to_datetime(df.pop(tcol), utc=True, dayfirst="gmt time" == tcol)
-    df.index = pd.DatetimeIndex(idx)
-    if "volume" not in df:
-        df["volume"] = 0.0
+def load_csv(path: str, utc_offset_hours: float = 0.0) -> pd.DataFrame:
+    """History from a CSV file.
+
+    Accepts a plain CSV (time/datetime/date column + open, high, low, close[, volume]) or the MetaTrader 5
+    "Export Bars" file (tab separated, <DATE> <TIME> <OPEN> <HIGH> <LOW> <CLOSE> <TICKVOL> ...).
+    utc_offset_hours: broker server time minus UTC (MT5 files are in broker time). 1m/5m data is resampled to 15m.
+    """
+    df = pd.read_csv(path, sep=None, engine="python")
+    df.columns = [c.strip().strip("<>").lower() for c in df.columns]
+    dayfirst = False
+    if "date" in df.columns and "time" in df.columns:  # MT5 export: separate date and time columns
+        stamp = df.pop("date").astype(str) + " " + df.pop("time").astype(str)
+    else:
+        tcol = next((c for c in ("time", "datetime", "date", "timestamp", "gmt time") if c in df.columns), None)
+        if tcol is None:
+            raise DataError("CSV needs a time/datetime column")
+        dayfirst = tcol == "gmt time"  # Dukascopy: dd.mm.yyyy
+        stamp = df.pop(tcol).astype(str)
+    stamp = stamp.str.replace(r"^(\d{4})\.(\d{2})\.(\d{2})", r"\1-\2-\3", regex=True)  # MT5: yyyy.mm.dd
+    idx = pd.to_datetime(stamp, utc=True, format="mixed", dayfirst=dayfirst)
+    df.index = pd.DatetimeIndex(idx) - pd.Timedelta(hours=utc_offset_hours)
+    if "volume" not in df or df["volume"].fillna(0).sum() == 0:
+        df["volume"] = df["tickvol"] if "tickvol" in df else 0.0
     df = df[COLUMNS].astype(float)
-    # resample to 15m in case the CSV is 1m/5m
     agg = df.resample("15min", label="left", closed="left").agg(
         {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
     )
