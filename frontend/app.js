@@ -215,7 +215,7 @@
       const list = (items, c) => (items || []).map((t) => `<li class="${c}">${esc(t)}</li>`).join("");
       body = `<p>${esc(v.summary)}</p><ul class="why">${list(v.reasons, "yes")}${list(v.risks, "no")}</ul>
         ${v.problems && v.problems.length ? `<p class="muted">Levels kept from strategies: ${esc(v.problems.join("; "))}</p>` : ""}
-        <div class="muted small">${esc(v.model || "")}</div>`;
+        <div class="muted small">${esc([v.provider, v.model].filter(Boolean).join(" · "))}</div>`;
     } else if (v.status === "error") {
       body = `<p class="muted small">${esc(v.error)}</p>`;
     }
@@ -391,7 +391,8 @@
       strategyList = st.strategies;
       state.ml = st.ml_model;
       const mlText = st.ml_model ? `ML filter on (test win rate ${st.ml_model.test_model_approved.win_rate_tp1 ?? "—"}%)` : "ML filter off";
-      $("#source").textContent = `Data: ${st.provider} · AI signals: ${st.ai_signal_mode} · ${mlText}`;
+      const aiText = st.ai_provider ? `AI: ${st.ai_provider} (${st.ai_signal_mode})` : "AI: off (no API key)";
+      $("#source").textContent = `Data: ${st.provider} · ${aiText} · ${mlText}`;
     } catch (_) { /* shown elsewhere */ }
     await loadCandles(true);
     await loadAnalysis();

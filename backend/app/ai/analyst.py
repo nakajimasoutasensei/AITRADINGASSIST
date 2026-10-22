@@ -1,12 +1,12 @@
-"""Claude as the head trader.
+"""An AI model (Claude or DeepSeek, see llm.py) as the head trader.
 
-Claude gets a snapshot of the market (candles on 4 timeframes, indicators, key levels, every strategy
+The AI gets a snapshot of the market (candles on 4 timeframes, indicators, key levels, every strategy
 vote, the engine's proposed trade, news, calendar, dollar/yields) and returns a decision:
 BUY / SELL / NO_TRADE with an entry zone, stop loss and three take-profits.
 
 Every decision passes safety checks (correct order of levels, sensible stop distance) before it is used.
 Calls run in a background thread and results are saved to backend/cache/ai_verdicts.json, so each
-candle / signal is only sent to Claude once.
+candle / signal is only sent to the AI once.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from pathlib import Path
 import pandas as pd
 
 from ..config import ROOT, settings
+from . import llm
 from ..strategies import Ctx
 from ..strategies.price_action import round_levels
 
@@ -171,29 +172,15 @@ def validate(v: dict, price: float, atr: float) -> list[str]:
     return p
 
 
-# ------------------------------------------------------------------ Claude call
+# ------------------------------------------------------------------ AI call
 
 
-def ask_claude(snapshot: dict) -> dict:
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    response = client.beta.messages.create(
-        model=settings.claude_model,
-        max_tokens=16000,
-        system=SYSTEM,
-        messages=[{"role": "user", "content": "Market snapshot:\n" + json.dumps(snapshot, separators=(",", ":"))}],
-        output_config={"effort": settings.claude_effort, "format": {"type": "json_schema", "schema": SCHEMA}},
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-    )
-    if response.stop_reason in ("refusal", "max_tokens"):
-        raise RuntimeError(f"Claude stopped early ({response.stop_reason})")
-    text = next(b.text for b in response.content if b.type == "text")
-    verdict = json.loads(text)
+def ask_ai(snapshot: dict) -> dict:
+    verdict = llm.complete_json(SYSTEM, "Market snapshot:\n" + json.dumps(snapshot, separators=(",", ":")),
+                                SCHEMA, max_tokens=8000)
+    meta = verdict.pop("_meta", {})
     verdict["confidence"] = max(0, min(100, int(verdict["confidence"])))
-    verdict["model"] = response.model
-    verdict["tokens"] = {"in": response.usage.input_tokens, "out": response.usage.output_tokens}
+    verdict.update(model=meta.get("model"), provider=meta.get("provider"), tokens=meta.get("tokens"))
     return verdict
 
 
@@ -201,7 +188,7 @@ def ask_claude(snapshot: dict) -> dict:
 
 
 class Analyst:
-    def __init__(self, path: Path = CACHE, caller=ask_claude):
+    def __init__(self, path: Path = CACHE, caller=ask_ai):
         self.path = path
         self.caller = caller
         self.lock = threading.Lock()
@@ -214,7 +201,7 @@ class Analyst:
 
     @property
     def enabled(self) -> bool:
-        return bool(settings.anthropic_api_key) and settings.ai_signal_mode in ("review", "full")
+        return llm.provider() is not None and settings.ai_signal_mode in ("review", "full")
 
     def get(self, key: str) -> dict | None:
         if key == self.pending:

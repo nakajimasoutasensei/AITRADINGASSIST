@@ -1,6 +1,6 @@
 """Gold news: fetch headlines, score each one as bullish/bearish for gold, and build a news bias.
 
-With ANTHROPIC_API_KEY set, Claude reads the headlines. Without it, a keyword model is used.
+With an AI key set (Claude or DeepSeek), the AI reads the headlines. Without one, a keyword model is used.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from email.utils import parsedate_to_datetime
 import feedparser
 import requests
 
-from ..config import settings
+from ..ai import llm
 
 log = logging.getLogger(__name__)
 
@@ -132,28 +132,14 @@ SYSTEM = (
 )
 
 
-def claude_score(headlines: list[dict]) -> dict[str, dict]:
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+def ai_score(headlines: list[dict]) -> dict[str, dict]:
     listing = "\n".join(f"[{h['id']}] {h['title']}" for h in headlines)
-    response = client.beta.messages.create(
-        model=settings.claude_model,
-        max_tokens=8000,
-        system=SYSTEM,
-        messages=[{"role": "user", "content": f"Score these headlines:\n<headlines>\n{listing}\n</headlines>"}],
-        output_config={"effort": "low", "format": {"type": "json_schema", "schema": SCHEMA}},
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-    )
-    if response.stop_reason in ("refusal", "max_tokens"):
-        raise RuntimeError(f"Claude stopped early: {response.stop_reason}")
-    text = next(b.text for b in response.content if b.type == "text")
-    items = json.loads(text)["items"]
+    out = llm.complete_json(SYSTEM, f"Score these headlines:\n<headlines>\n{listing}\n</headlines>", SCHEMA)
+    name = out.get("_meta", {}).get("provider", "ai")
     return {
         it["id"]: {"impact": it["impact"], "strength": it["strength"] / 3, "event_risk": it["event_risk"],
-                   "reason": it["reason"], "model": "claude"}
-        for it in items
+                   "reason": it["reason"], "model": name}
+        for it in out["items"]
     }
 
 
@@ -161,15 +147,13 @@ def analyze(headlines: list[dict]) -> list[dict]:
     """Adds an analysis to each headline. Results are cached so each headline is only scored once."""
     new = [h for h in headlines if h["id"] not in _seen]
     scored: dict[str, dict] = {}
-    if new and settings.anthropic_api_key:
-        import anthropic
-
+    if new and llm.provider():
         for k in range(0, len(new), 25):
             batch = new[k : k + 25]
             try:
-                scored.update(claude_score(batch))
-            except (anthropic.APIError, RuntimeError, ValueError, KeyError, StopIteration) as e:
-                log.warning("Claude news scoring failed, using keywords: %s", e)
+                scored.update(ai_score(batch))
+            except (llm.LLMError, ValueError, KeyError) as e:
+                log.warning("AI news scoring failed, using keywords: %s", e)
                 break
     for h in new:
         _seen[h["id"]] = {**h, **(scored.get(h["id"]) or keyword_score(h["title"]))}
@@ -204,4 +188,4 @@ def get_news(ttl: float = 600) -> dict:
         analyzed = analyze(heads[:60])
         _state.update(time=time.time(), headlines=analyzed, bias=news_bias(analyzed))
     return {"bias": round(_state["bias"], 3), "headlines": _state["headlines"],
-            "model": "claude" if settings.anthropic_api_key else "keywords"}
+            "model": llm.provider() or "keywords"}

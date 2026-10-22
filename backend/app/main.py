@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import backtest, ml
+from .ai import llm
 from .ai.analyst import analyst, build_snapshot
 from .config import ROOT, settings
 from .data.intermarket import get_intermarket
@@ -128,7 +129,7 @@ def _live_cfg():
 
 
 _PUBLIC = ("status", "action", "confidence", "agrees_with_engine", "summary", "reasons", "risks",
-           "problems", "levels_ok", "model", "decided_at", "error", "zone_low", "zone_high", "sl", "tp1", "tp2", "tp3")
+           "problems", "levels_ok", "provider", "model", "decided_at", "error", "zone_low", "zone_high", "sl", "tp1", "tp2", "tp3")
 
 
 def _public(v: dict | None) -> dict | None:
@@ -179,10 +180,11 @@ def status():
     return {
         "symbol": "XAUUSD",
         "provider": settings.data_provider,
-        "news_model": "claude" if settings.anthropic_api_key else "keywords",
+        "ai_provider": llm.provider(),
+        "ai_model": llm.model_name(),
+        "news_model": llm.provider() or "keywords",
         "ai_signal_mode": settings.ai_signal_mode if analyst.enabled else "off",
         "ml_model": (m.report if (m := ml.load()) else None),
-        "claude_model": settings.claude_model if settings.anthropic_api_key else None,
         "account_balance": settings.account_balance,
         "risk_percent": settings.risk_percent,
         "strategies": [{"name": s.name, "label": s.label, "description": s.description} for s in STRATEGIES],

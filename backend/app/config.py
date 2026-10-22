@@ -22,10 +22,15 @@ class Settings:
     twelvedata_api_key: str = os.getenv("TWELVEDATA_API_KEY", "").strip()
     mt5_symbol: str = os.getenv("MT5_SYMBOL", "XAUUSD").strip()
     mt5_utc_offset: float = _float("MT5_UTC_OFFSET", 0.0)
+    # which AI: auto (Claude if its key is set, else DeepSeek), claude, or deepseek
+    ai_provider: str = os.getenv("AI_PROVIDER", "auto").strip().lower()
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "").strip()
+    deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash").strip()
+    deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip()
     claude_model: str = os.getenv("AI_MODEL", "claude-opus-5-5").strip()
     claude_effort: str = os.getenv("AI_EFFORT", "medium").strip().lower()
-    # off = engine only; review = Claude checks every engine signal; full = Claude may also find its own trades
+    # off = engine only; review = the AI checks every engine signal; full = the AI may also find its own trades
     ai_signal_mode: str = os.getenv("AI_SIGNAL_MODE", "review").strip().lower()
     account_balance: float = _float("ACCOUNT_BALANCE", 1000.0)
     risk_percent: float = _float("RISK_PERCENT", 1.0)

@@ -36,10 +36,13 @@ uvicorn backend.app.main:app --port 8000
 | `DATA_PROVIDER` | `yfinance` (free, default, uses gold futures `GC=F` which are a few $ above spot), `twelvedata` (real XAU/USD spot, free key at twelvedata.com), `mt5` (your MetaTrader 5 terminal, Windows: also `pip install MetaTrader5`), `synthetic` (fake data for testing) |
 | `TWELVEDATA_API_KEY` | needed for `twelvedata` |
 | `MT5_SYMBOL`, `MT5_UTC_OFFSET` | broker symbol name (e.g. `XAUUSD`, `XAUUSDm`) and the broker server's UTC offset in hours |
-| `ANTHROPIC_API_KEY` | optional: lets Claude read the news. Without it a simple keyword model is used |
-| `AI_MODEL` | Claude model for news and signals, default `claude-opus-5-5` |
+| `AI_PROVIDER` | `auto` (default: Claude if its key is set, otherwise DeepSeek), `claude` or `deepseek` |
+| `ANTHROPIC_API_KEY` | key for Claude. Without any AI key a simple keyword model reads the news |
+| `AI_MODEL` | Claude model, default `claude-opus-5-5` |
 | `AI_EFFORT` | how hard Claude thinks per decision: `low`, `medium` (default), `high` |
-| `AI_SIGNAL_MODE` | `review` (default): Claude checks every strategy signal · `full`: Claude may also find its own trades · `off` |
+| `DEEPSEEK_API_KEY` | key for DeepSeek (platform.deepseek.com) |
+| `DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL` | default `deepseek-v4-flash` and `https://api.deepseek.com`; check DeepSeek's docs for current model names |
+| `AI_SIGNAL_MODE` | `review` (default): the AI checks every strategy signal · `full`: the AI may also find its own trades · `off` |
 | `ACCOUNT_BALANCE`, `RISK_PERCENT` | used for the lot-size calculator (default $1000, 1%) |
 | `SPREAD` | spread in $ added to stop losses and charged in backtests (default 0.30) |
 
@@ -61,11 +64,12 @@ uvicorn backend.app.main:app --port 8000
    Plan: close 50% at TP1 and move SL to entry, close 30% at TP2, let 20% run to TP3.
 8. **ML model** (once trained, see below): every candidate gets a probability of reaching TP1 learned from
    history. Only candidates above the model's threshold become signals.
-9. **Claude, the AI analyst** (with `ANTHROPIC_API_KEY`): gets a snapshot of the market (candles on
+9. **The AI analyst** (Claude or DeepSeek, whichever key is set): gets a snapshot of the market (candles on
    15m/1h/4h/daily, indicators, levels, all strategy votes, the proposed trade, news, calendar, dollar/yields)
    and decides: **confirm**, **adjust** the zone/SL/TP, or **reject**. In `full` mode it may also propose its
    own trade on a new candle when strategies are active. Its levels must pass safety checks (right order,
-   stop 0.6–4 ATR away, zone near price) or the strategy levels are kept. Each signal is sent to Claude only
+   stop 0.6–4 ATR away, zone near price) or the strategy levels are kept. DeepSeek answers are also checked
+   field by field, because its JSON mode doesn't enforce the format. Each signal is sent to the AI only
    once; answers are saved in `backend/cache/ai_verdicts.json`.
 
    Cost: one decision is roughly 5–8k input tokens plus the answer. In `review` mode that is a few calls a
@@ -114,9 +118,10 @@ backend/app/
   engine.py              regime, voting, filters, entry zone / SL / TP / lot size
   backtest.py            bar-by-bar simulation with spread and partial take-profits
   ml.py                  ML model that learns which setups reach TP1
-  ai/analyst.py          Claude as AI analyst: confirms / adjusts / rejects / finds signals
+  ai/llm.py              one interface for Claude and DeepSeek (+ answer format checks)
+  ai/analyst.py          AI analyst: confirms / adjusts / rejects / finds signals
   news/calendar.py       economic calendar (Forex Factory feed)
-  news/sentiment.py      headlines + Claude / keyword sentiment -> news bias
+  news/sentiment.py      headlines + AI / keyword sentiment -> news bias
   main.py                FastAPI server
 frontend/                dashboard (TradingView Lightweight Charts, vendored, Apache-2.0)
 ```
