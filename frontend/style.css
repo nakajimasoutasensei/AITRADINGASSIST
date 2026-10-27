@@ -41,6 +41,9 @@ button { font: inherit; color: inherit; }
 .tf button { background: none; border: 0; padding: 6px 12px; cursor: pointer; color: var(--muted); }
 .tf button.active { background: var(--panel-2); color: var(--text); }
 .meta { display: flex; gap: 12px; color: var(--muted); font-size: 12px; }
+.lang { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.lang button { background: none; border: 0; padding: 6px 10px; cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 600; }
+.lang button.active { background: var(--panel-2); color: var(--gold); }
 
 /* layout */
 .layout {

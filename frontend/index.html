@@ -13,7 +13,7 @@
     <div class="brand">
       <span class="symbol">XAUUSD</span>
       <span id="price" class="price">—</span>
-      <span id="regime" class="badge">loading…</span>
+      <span id="regime" class="badge" data-i18n="loading">loading…</span>
     </div>
     <div class="tf" role="group" aria-label="Timeframe">
       <button data-tf="15m" class="active">15m</button>
@@ -23,6 +23,10 @@
     <div class="meta">
       <span id="source"></span>
       <span id="updated"></span>
+    </div>
+    <div class="lang" role="group" aria-label="Language / Bahasa">
+      <button data-lang="en">EN</button>
+      <button data-lang="id">ID</button>
     </div>
   </header>
 
@@ -35,7 +39,7 @@
         <span><i class="sw ema20"></i>EMA 20</span>
         <span><i class="sw ema50"></i>EMA 50</span>
         <span><i class="sw ema200"></i>EMA 200</span>
-        <span><i class="sw zone"></i>Entry zone</span>
+        <span><i class="sw zone"></i><span data-i18n="legend_zone">Entry zone</span></span>
         <span><i class="sw tp"></i>TP</span>
         <span><i class="sw sl"></i>SL</span>
       </div>
@@ -43,35 +47,36 @@
 
     <aside class="side">
       <div id="signal" class="card signal-card">
-        <div class="muted">Analysing…</div>
+        <div class="muted" data-i18n="analysing">Analysing…</div>
       </div>
       <div class="card">
-        <h3>Why</h3>
+        <h3 data-i18n="why">Why</h3>
         <ul id="why" class="why"></ul>
       </div>
       <div class="card bias">
-        <h3>Market context</h3>
+        <h3 data-i18n="context">Market context</h3>
         <div id="context"></div>
       </div>
     </aside>
 
     <section class="panels">
       <nav class="tabs" role="tablist">
-        <button data-tab="votes" class="active">Strategies</button>
-        <button data-tab="news">News</button>
-        <button data-tab="calendar">Calendar</button>
-        <button data-tab="backtest">Backtest</button>
+        <button data-tab="votes" class="active" data-i18n="tab_votes">Strategies</button>
+        <button data-tab="news" data-i18n="tab_news">News</button>
+        <button data-tab="calendar" data-i18n="tab_calendar">Calendar</button>
+        <button data-tab="backtest" data-i18n="tab_backtest">Backtest</button>
       </nav>
       <div id="tab-votes" class="tab active"></div>
       <div id="tab-news" class="tab"></div>
       <div id="tab-calendar" class="tab"></div>
-      <div id="tab-backtest" class="tab"><button id="run-bt" class="btn">Run backtest on loaded data</button><div id="bt"></div></div>
+      <div id="tab-backtest" class="tab"><button id="run-bt" class="btn" data-i18n="run_bt">Run backtest on loaded data</button><div id="bt"></div></div>
     </section>
   </main>
 
-  <footer class="foot">
+  <footer class="foot" data-i18n="footer">
     Signals are for information only, not financial advice. Trading leveraged gold carries a high risk of loss.
   </footer>
+  <script src="/static/i18n.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

@@ -8,6 +8,9 @@ economic calendar**, checks the **US dollar and bond yields**, and shows on a li
 - a grade (**A+ / A / B**), a score, the lot size for your risk, and the reasons behind the signal
 - a **backtest** of the same rules on the loaded history, with arrows on the chart for every past trade
 
+The dashboard is available in **English and Bahasa Indonesia** (EN / ID switch at the top right; the
+choice is remembered). The AI writes its explanations in both languages.
+
 See [PLAN.md](PLAN.md) for the full design and roadmap.
 
 > Signals are for information only and are not financial advice. Test on a demo account first.
@@ -125,4 +128,5 @@ backend/app/
   news/sentiment.py      headlines + AI / keyword sentiment -> news bias
   main.py                FastAPI server
 frontend/                dashboard (TradingView Lightweight Charts, vendored, Apache-2.0)
+  i18n.js                English / Indonesian texts and translations of server messages
 ```

@@ -99,13 +99,15 @@ def deepseek(monkeypatch):
 
 
 VERDICT = {"action": "BUY", "confidence": "71", "agrees_with_engine": True, "zone_low": 99, "zone_high": 100,
-           "sl": 97.5, "tp1": 101.5, "tp2": 103, "tp3": 105, "summary": "ok", "reasons": ["a"], "risks": []}
+           "sl": 97.5, "tp1": 101.5, "tp2": 103, "tp3": 105, "summary": "ok", "reasons": ["a"], "risks": [],
+           "summary_id": "oke", "reasons_id": ["a"], "risks_id": []}
 
 
 def test_deepseek_analyst_call(deepseek):
     deepseek.script = [(200, ""), (200, "```json\n" + json.dumps(VERDICT) + "\n```")]  # empty first, then fenced
     v = an.ask_ai({"price": 100})
     assert v["action"] == "BUY" and v["confidence"] == 71 and v["provider"] == "deepseek"
+    assert v["summary_id"] == "oke"
     req = deepseek.seen[-1]
     assert req["path"] == "/chat/completions" and req["auth"] == "Bearer ds-key"
     assert req["body"]["model"] == "deepseek-test"
@@ -128,11 +130,13 @@ def test_deepseek_incomplete_answer_is_rejected(deepseek):
 
 
 def test_deepseek_scores_news(deepseek, monkeypatch):
-    items = {"items": [{"id": "h1", "impact": "bearish", "strength": 2, "event_risk": "low", "reason": "yields up"}]}
+    items = {"items": [{"id": "h1", "impact": "bearish", "strength": 2, "event_risk": "low", "reason": "yields up",
+                        "reason_id": "yield naik"}]}
     deepseek.script = [(200, json.dumps(items))]
     monkeypatch.setattr(sentiment, "_seen", {})
     out = sentiment.analyze([{"id": "h1", "title": "Yields jump", "time": "2026-10-20T10:00:00+00:00"}])
     assert out[0]["impact"] == "bearish" and out[0]["model"] == "deepseek"
+    assert out[0]["reason_id"] == "yield naik"
     assert out[0]["strength"] == pytest.approx(2 / 3)
 
 

@@ -129,6 +129,7 @@ def _live_cfg():
 
 
 _PUBLIC = ("status", "action", "confidence", "agrees_with_engine", "summary", "reasons", "risks",
+           "summary_id", "reasons_id", "risks_id",
            "problems", "levels_ok", "provider", "model", "decided_at", "error", "zone_low", "zone_high", "sl", "tp1", "tp2", "tp3")
 
 

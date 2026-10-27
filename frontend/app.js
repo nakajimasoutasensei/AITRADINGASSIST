@@ -2,6 +2,7 @@
 (() => {
   "use strict";
 
+  const { t, tr } = window.I18N;
   const $ = (s) => document.querySelector(s);
   const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
   // show times in the viewer's local timezone (the chart library works in UTC)
@@ -11,9 +12,11 @@
   const chartTime = (unix) => unix + TZ_SHIFT;
   const fmt = (n, d = 2) => (n == null || Number.isNaN(n) ? "—" : Number(n).toFixed(d));
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const localTime = (iso) => new Date(iso).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
+  const localTime = (iso) => new Date(iso).toLocaleString(I18N.locale, { weekday: "short", hour: "2-digit", minute: "2-digit" });
+  const localDate = (iso) => new Date(iso).toLocaleDateString(I18N.locale);
 
-  const state = { tf: "15m", analysis: null, priceLines: [], lastBarTime: null, trades: [], candles: [] };
+  // latest data from the server, kept so the page can be redrawn when the language changes
+  const state = { tf: "15m", analysis: null, news: null, status: null, backtest: null, priceLines: [], trades: [], candles: [] };
   // the signal to draw on the chart (none when the AI analyst rejected it)
   const drawable = () => {
     const s = state.analysis && state.analysis.active_signal;
@@ -85,7 +88,7 @@
       ctx.strokeRect(x1 + 0.5, top + 0.5, Math.min(x2, plotRight) - x1 - 1, height - 1);
       ctx.fillStyle = buy ? css("--buy") : css("--sell");
       ctx.font = "600 11px system-ui, sans-serif";
-      const label = `${sig.direction} ZONE ${fmt(sig.zone_low)}–${fmt(sig.zone_high)}`;
+      const label = t("zone_label", { dir: sig.direction, lo: fmt(sig.zone_low), hi: fmt(sig.zone_high) });
       // leave ~70px free at the right edge for the price-line tags (Entry, TP1, SL ...)
       const lx = Math.max(4, Math.min(x1 + 6, plotRight - ctx.measureText(label).width - 70));
       ctx.fillText(label, lx, top - 5);
@@ -119,17 +122,17 @@
     const tfSec = TF_SECONDS[state.tf];
     const first = state.candles.length ? state.candles[0].time : 0;
     const markers = state.trades
-      .filter((t) => t.fill_time)
-      .map((t) => {
-        const tt = chartTime(Math.floor(toUnix(t.signal_time) / tfSec) * tfSec);
-        const buy = t.direction === "BUY";
-        const win = t.result_r > 0;
+      .filter((tr_) => tr_.fill_time)
+      .map((tr_) => {
+        const tt = chartTime(Math.floor(toUnix(tr_.signal_time) / tfSec) * tfSec);
+        const buy = tr_.direction === "BUY";
+        const win = tr_.result_r > 0;
         return {
           time: tt,
           position: buy ? "belowBar" : "aboveBar",
           color: win ? css("--buy") : css("--sell"),
           shape: buy ? "arrowUp" : "arrowDown",
-          text: `${t.grade} ${t.result_r > 0 ? "+" : ""}${fmt(t.result_r, 1)}R`,
+          text: `${tr_.grade} ${tr_.result_r > 0 ? "+" : ""}${fmt(tr_.result_r, 1)}R`,
         };
       })
       .filter((m) => m.time >= first)
@@ -151,7 +154,7 @@
   function showError(msg) {
     const box = $("#chart-error");
     box.hidden = !msg;
-    box.textContent = msg ? `Cannot load data: ${msg}` : "";
+    box.textContent = msg ? t("cannot_load", { msg }) : "";
   }
 
   async function loadCandles(fit = false) {
@@ -172,55 +175,53 @@
 
   async function loadAnalysis() {
     try {
-      const a = await api("/api/analysis");
-      state.analysis = a;
-      renderSignal(a);
-      renderWhy(a);
-      renderContext(a);
-      renderVotes(a);
-      renderCalendar(a.upcoming_events || []);
-      setPriceLines(drawable(), a.levels);
-      const reg = $("#regime");
-      reg.textContent = { trend_up: "Trending up", trend_down: "Trending down", range: "Ranging", volatile: "Very volatile" }[a.regime] || a.regime;
-      reg.className = `badge ${a.regime}`;
-      const age = a.data_age_minutes;
-      const ageText = age < 90 ? `${Math.round(age)} min` : age < 2880 ? `${Math.round(age / 60)} h` : `${Math.round(age / 1440)} days`;
-      $("#updated").textContent = `Last candle ${localTime(a.time)} · ${ageText} ago${age > 60 ? " (market closed or data delayed)" : ""}`;
+      state.analysis = await api("/api/analysis");
+      state.analysisError = null;
+      setPriceLines(drawable(), state.analysis.levels);
     } catch (e) {
-      $("#signal").innerHTML = `<div class="muted">Analysis unavailable: ${esc(e.message)}</div>`;
+      state.analysisError = e.message;
     }
+    renderAnalysis();
   }
 
   async function loadNews() {
-    try { renderNews(await api("/api/news")); } catch (e) { $("#tab-news").innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
+    try { state.news = await api("/api/news"); state.newsError = null; } catch (e) { state.newsError = e.message; }
+    renderNews();
+  }
+
+  async function loadStatus() {
+    try { state.status = await api("/api/status"); } catch (_) { /* shown elsewhere */ }
+    renderStatus();
   }
 
   // ------------------------------------------------------------------ render
   const AI_LABEL = {
-    confirmed: ["yes", "AI confirmed this trade"],
-    adjusted: ["yes", "AI confirmed and adjusted the levels"],
-    rejected: ["no", "AI rejected this trade"],
-    analysing: ["wait", "AI is analysing…"],
-    error: ["no", "AI analyst unavailable — strategies only"],
-    "not reviewed": ["idle", "Not reviewed by AI"],
-    "ai signal": ["yes", "Trade found by the AI analyst"],
+    confirmed: ["yes", "ai_confirmed"],
+    adjusted: ["yes", "ai_adjusted"],
+    rejected: ["no", "ai_rejected"],
+    analysing: ["wait", "ai_analysing"],
+    error: ["no", "ai_error"],
+    "not reviewed": ["idle", "ai_not_reviewed"],
+    "ai signal": ["yes", "ai_signal"],
   };
 
   function aiBlock(s) {
     if (!s.ai_status) return "";
-    const [cls, label] = AI_LABEL[s.ai_status] || ["idle", s.ai_status];
+    const [cls, key] = AI_LABEL[s.ai_status] || ["idle", s.ai_status];
     const v = s.ai || {};
     let body = "";
     if (v.status === "ok") {
-      const list = (items, c) => (items || []).map((t) => `<li class="${c}">${esc(t)}</li>`).join("");
-      body = `<p>${esc(v.summary)}</p><ul class="why">${list(v.reasons, "yes")}${list(v.risks, "no")}</ul>
-        ${v.problems && v.problems.length ? `<p class="muted">Levels kept from strategies: ${esc(v.problems.join("; "))}</p>` : ""}
+      const list = (items, c) => (items || []).map((x) => `<li class="${c}">${esc(x)}</li>`).join("");
+      const problems = (v.problems || []).map(tr).join("; ");
+      body = `<p>${esc(I18N.aiText(v, "summary"))}</p>
+        <ul class="why">${list(I18N.aiText(v, "reasons"), "yes")}${list(I18N.aiText(v, "risks"), "no")}</ul>
+        ${problems ? `<p class="muted">${esc(t("levels_kept", { p: problems }))}</p>` : ""}
         <div class="muted small">${esc([v.provider, v.model].filter(Boolean).join(" · "))}</div>`;
     } else if (v.status === "error") {
       body = `<p class="muted small">${esc(v.error)}</p>`;
     }
     const conf = v.status === "ok" ? `<span class="ai-conf">${v.confidence}%</span>` : "";
-    return `<div class="ai-box ${cls}"><div class="ai-head"><b>${label}</b>${conf}</div>${body}</div>`;
+    return `<div class="ai-box ${cls}"><div class="ai-head"><b>${esc(t(key))}</b>${conf}</div>${body}</div>`;
   }
 
   function renderSignal(a) {
@@ -228,64 +229,68 @@
     const box = $("#signal");
     if (!s) {
       box.className = "card signal-card";
-      const items = (a.blocked || []).map((b) => `<li>${esc(b)}</li>`).join("");
+      const items = (a.blocked || []).map((b) => `<li>${esc(tr(b))}</li>`).join("");
       const scan = a.ai_scan;
       let scanText = "";
-      if (scan && (scan.status === "pending" || scan.status === "queued")) scanText = '<div class="ai-box wait"><b>AI is scanning the market…</b></div>';
-      else if (scan && scan.status === "ok") scanText = `<div class="ai-box idle"><b>AI: ${scan.action === "NO_TRADE" ? "no trade right now" : esc(scan.action)}</b><p>${esc(scan.summary)}</p></div>`;
+      if (scan && (scan.status === "pending" || scan.status === "queued")) {
+        scanText = `<div class="ai-box wait"><b>${esc(t("ai_scanning"))}</b></div>`;
+      } else if (scan && scan.status === "ok") {
+        const action = scan.action === "NO_TRADE" ? t("ai_no_trade_now") : scan.action;
+        scanText = `<div class="ai-box idle"><b>AI: ${esc(action)}</b><p>${esc(I18N.aiText(scan, "summary"))}</p></div>`;
+      }
       box.innerHTML = `
-        <div class="sig-head"><span class="sig-dir">No trade</span><span class="grade">—</span></div>
-        <p class="muted">Waiting for a good setup. Current reasons:</p>
-        <ul class="blocked">${items || "<li>No setup on the latest candle</li>"}</ul>${scanText}`;
+        <div class="sig-head"><span class="sig-dir">${esc(t("no_trade"))}</span><span class="grade">—</span></div>
+        <p class="muted">${esc(t("waiting_setup"))}</p>
+        <ul class="blocked">${items || `<li>${esc(t("no_setup"))}</li>`}</ul>${scanText}`;
       return;
     }
     const dir = s.direction.toLowerCase();
     const rejected = s.ai_status === "rejected";
     box.className = `card signal-card ${rejected ? "rejected" : dir}`;
-    const heading = rejected ? "Rejected signal — no trade" : s.open ? "Active signal" : "Last signal (finished) — waiting for a new setup";
-    const who = s.source === "ai" ? "found by the AI analyst" : `${s.strategies.length} strategies agree`;
-    const ml = s.ml_probability != null ? ` · ML: ${fmt(s.ml_probability, 0)}% chance of TP1` : "";
+    const heading = t(rejected ? "heading_rejected" : s.open ? "heading_active" : "heading_finished");
+    const who = s.source === "ai" ? t("who_ai") : t("who_n", { n: s.strategies.length });
+    const ml = s.ml_probability != null ? t("ml_prob", { p: fmt(s.ml_probability, 0) }) : "";
     box.innerHTML = `
-      <div class="muted">${heading} · ${localTime(s.created)}</div>
+      <div class="muted">${esc(heading)} · ${localTime(s.created)}</div>
       <div class="sig-head">
         <span class="sig-dir ${rejected ? "" : dir}">${rejected ? "<s>" + s.direction + "</s>" : s.direction}</span>
-        <span class="grade g-${s.grade.replace("+", "p")}" title="Signal grade">${s.grade}</span>
+        <span class="grade g-${s.grade.replace("+", "p")}" title="${esc(t("grade_title"))}">${s.grade}</span>
       </div>
-      <div class="muted">Score ${fmt(s.score, 0)}/100 · ${who}${ml}</div>
+      <div class="muted">${esc(t("score", { s: fmt(s.score, 0) }))} · ${esc(who)}${esc(ml)}</div>
       <div class="scorebar"><i style="width:${Math.min(100, s.score)}%"></i></div>
       ${aiBlock(s)}
       <dl class="kv${rejected ? " dim" : ""}">
-        <dt>Entry zone</dt><dd class="zone">${fmt(s.zone_low)} – ${fmt(s.zone_high)}</dd>
-        <dt>Entry (limit)</dt><dd>${fmt(s.entry)}</dd>
-        <dt>Stop loss</dt><dd class="sl">${fmt(s.sl)}</dd>
-        <dt>TP1 · close 50%</dt><dd class="tp">${fmt(s.tp1)}</dd>
-        <dt>TP2 · close 30%</dt><dd class="tp">${fmt(s.tp2)}</dd>
-        <dt>TP3 · runner</dt><dd class="tp">${fmt(s.tp3)}</dd>
-        <dt>Risk : reward (TP2)</dt><dd>1 : ${fmt(s.rr_tp2, 1)}</dd>
-        <dt>Lot size</dt><dd>${fmt(s.lot)} lot (≈ $${fmt(s.risk_usd, 0)} risk)</dd>
-        <dt>Valid until</dt><dd>${localTime(s.valid_until)}</dd>
+        <dt>${t("kv_zone")}</dt><dd class="zone">${fmt(s.zone_low)} – ${fmt(s.zone_high)}</dd>
+        <dt>${t("kv_entry")}</dt><dd>${fmt(s.entry)}</dd>
+        <dt>${t("kv_sl")}</dt><dd class="sl">${fmt(s.sl)}</dd>
+        <dt>${t("kv_tp1")}</dt><dd class="tp">${fmt(s.tp1)}</dd>
+        <dt>${t("kv_tp2")}</dt><dd class="tp">${fmt(s.tp2)}</dd>
+        <dt>${t("kv_tp3")}</dt><dd class="tp">${fmt(s.tp3)}</dd>
+        <dt>${t("kv_rr")}</dt><dd>1 : ${fmt(s.rr_tp2, 1)}</dd>
+        <dt>${t("kv_lot")}</dt><dd>${esc(t("kv_lot_val", { lot: fmt(s.lot), usd: fmt(s.risk_usd, 0) }))}</dd>
+        <dt>${t("kv_valid")}</dt><dd>${localTime(s.valid_until)}</dd>
       </dl>
-      ${s.engine_levels ? `<div class="muted small">Strategy levels before AI: SL ${fmt(s.engine_levels.sl)} · TP1 ${fmt(s.engine_levels.tp1)} · zone ${fmt(s.engine_levels.zone_low)}–${fmt(s.engine_levels.zone_high)}</div>` : ""}
-      <div class="status">Status: <b>${esc(s.status)}</b></div>`;
+      ${s.engine_levels ? `<div class="muted small">${esc(t("engine_levels", { sl: fmt(s.engine_levels.sl), tp1: fmt(s.engine_levels.tp1), z: `${fmt(s.engine_levels.zone_low)}–${fmt(s.engine_levels.zone_high)}` }))}</div>` : ""}
+      <div class="status">${t("status")}: <b>${esc(tr(s.status))}</b></div>`;
   }
 
   function renderWhy(a) {
     const s = a.active_signal;
     const li = [];
     if (s) {
-      s.reasons.forEach((r) => li.push(`<li class="yes">${esc(r)}</li>`));
-      s.against.forEach((r) => li.push(`<li class="no">${esc(r)}</li>`));
+      s.reasons.forEach((r) => li.push(`<li class="yes">${esc(tr(r))}</li>`));
+      s.against.forEach((r) => li.push(`<li class="no">${esc(tr(r))}</li>`));
     } else {
-      (a.votes || []).forEach((v) => li.push(`<li class="note">${esc(v.direction)}: ${esc(v.reason)}</li>`));
+      (a.votes || []).forEach((v) => li.push(`<li class="note">${esc(v.direction)}: ${esc(tr(v.reason))}</li>`));
     }
-    (a.notes || []).forEach((n) => li.push(`<li class="note">${esc(n)}</li>`));
-    $("#why").innerHTML = li.join("") || `<li class="muted">No active strategy votes right now.</li>`;
+    (a.notes || []).forEach((n) => li.push(`<li class="note">${esc(tr(n))}</li>`));
+    $("#why").innerHTML = li.join("") || `<li class="muted">${esc(t("no_votes"))}</li>`;
   }
 
   function biasText(b) {
     if (b == null) return "—";
     const cls = b > 0.15 ? "pos" : b < -0.15 ? "neg" : "muted";
-    const word = b > 0.15 ? "bullish" : b < -0.15 ? "bearish" : "neutral";
+    const word = t(b > 0.15 ? "bullish" : b < -0.15 ? "bearish" : "neutral");
     return `<span class="${cls}">${word} (${b > 0 ? "+" : ""}${fmt(b, 2)})</span>`;
   }
 
@@ -293,83 +298,149 @@
     const im = a.intermarket || {};
     const L = a.levels || {};
     const rows = [
-      ["News bias for gold", biasText(a.news_bias)],
-      ["Dollar & yields bias", im.ok ? biasText(im.bias) : '<span class="muted">unavailable</span>'],
-      ["US Dollar Index (24h)", im.dxy != null ? `${fmt(im.dxy)} (${im.dxy_change_pct > 0 ? "+" : ""}${fmt(im.dxy_change_pct)}%)` : "—"],
-      ["US 10Y yield (24h)", im.us10y != null ? `${fmt(im.us10y, 3)}% (${im.us10y_change > 0 ? "+" : ""}${fmt(im.us10y_change, 3)})` : "—"],
-      ["Buy / sell strength", `<span class="pos">${fmt(a.buy_strength)}</span> / <span class="neg">${fmt(a.sell_strength)}</span>`],
-      ["Previous day high / low", `${fmt(L.prev_day_high)} / ${fmt(L.prev_day_low)}`],
-      ["Asian range", `${fmt(L.asia_low)} – ${fmt(L.asia_high)}`],
-      ["ATR (15m)", fmt(a.atr)],
+      ["ctx_news", biasText(a.news_bias)],
+      ["ctx_dollar", im.ok ? biasText(im.bias) : `<span class="muted">${t("unavailable")}</span>`],
+      ["ctx_dxy", im.dxy != null ? `${fmt(im.dxy)} (${im.dxy_change_pct > 0 ? "+" : ""}${fmt(im.dxy_change_pct)}%)` : "—"],
+      ["ctx_us10y", im.us10y != null ? `${fmt(im.us10y, 3)}% (${im.us10y_change > 0 ? "+" : ""}${fmt(im.us10y_change, 3)})` : "—"],
+      ["ctx_strength", `<span class="pos">${fmt(a.buy_strength)}</span> / <span class="neg">${fmt(a.sell_strength)}</span>`],
+      ["ctx_pd", `${fmt(L.prev_day_high)} / ${fmt(L.prev_day_low)}`],
+      ["ctx_asia", `${fmt(L.asia_low)} – ${fmt(L.asia_high)}`],
+      ["ctx_atr", fmt(a.atr)],
     ];
-    $("#context").innerHTML = rows.map(([k, v]) => `<div class="row"><span class="muted">${k}</span><span>${v}</span></div>`).join("");
+    $("#context").innerHTML = rows.map(([k, v]) => `<div class="row"><span class="muted">${t(k)}</span><span>${v}</span></div>`).join("");
   }
 
-  let strategyList = [];
   function renderVotes(a) {
     const active = Object.fromEntries((a.votes || []).map((v) => [v.strategy, v]));
-    const rows = strategyList.map((s) => {
-      const v = active[s.name];
-      const pill = v ? `<span class="pill ${v.direction}">${v.direction}</span>` : `<span class="pill idle">idle</span>`;
-      return `<tr><td>${pill}</td><td><b>${esc(s.label)}</b><div class="muted">${esc(v ? v.reason : s.description)}</div></td>
+    const list = (state.status && state.status.strategies) || [];
+    const rows = list.map((st) => {
+      const v = active[st.name];
+      const { label, description } = I18N.strategy(st.name, st.label, st.description);
+      const pill = v ? `<span class="pill ${v.direction}">${v.direction}</span>` : `<span class="pill idle">${t("idle")}</span>`;
+      return `<tr><td>${pill}</td><td><b>${esc(label)}</b><div class="muted">${esc(v ? tr(v.reason) : description)}</div></td>
         <td>${v ? fmt(v.confidence * 100, 0) + "%" : ""}</td><td>${v ? fmt(v.zone_low) + " – " + fmt(v.zone_high) : ""}</td></tr>`;
     }).join("");
-    $("#tab-votes").innerHTML = `<div class="table-scroll"><table><thead><tr><th>Vote</th><th>Strategy</th><th>Confidence</th><th>Zone</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    $("#tab-votes").innerHTML = `<div class="table-scroll"><table><thead><tr><th>${t("th_vote")}</th><th>${t("th_strategy")}</th>
+      <th>${t("th_confidence")}</th><th>${t("th_zone")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
-  function renderNews(n) {
+  function renderAnalysis() {
+    if (state.analysisError && !state.analysis) {
+      $("#signal").innerHTML = `<div class="muted">${esc(t("analysis_unavailable", { msg: state.analysisError }))}</div>`;
+      return;
+    }
+    const a = state.analysis;
+    if (!a) return;
+    renderSignal(a);
+    renderWhy(a);
+    renderContext(a);
+    renderVotes(a);
+    renderCalendar(a.upcoming_events || []);
+    const reg = $("#regime");
+    reg.textContent = t(`regime_${a.regime}`);
+    reg.className = `badge ${a.regime}`;
+    const age = a.data_age_minutes;
+    const ageText = age < 90 ? t("age_min", { n: Math.round(age) }) : age < 2880 ? t("age_h", { n: Math.round(age / 60) }) : t("age_days", { n: Math.round(age / 1440) });
+    $("#updated").textContent = t("updated", { time: localTime(a.time), age: ageText }) + (age > 60 ? t("market_closed") : "");
+  }
+
+  function renderNews() {
+    if (state.newsError && !state.news) {
+      $("#tab-news").innerHTML = `<p class="muted">${esc(state.newsError)}</p>`;
+      return;
+    }
+    const n = state.news;
+    if (!n) return;
     const rows = (n.headlines || []).slice(0, 40).map((h) => `
-      <tr><td><span class="pill ${h.impact}">${h.impact}</span></td>
+      <tr><td><span class="pill ${h.impact}">${t(h.impact)}</span></td>
       <td><a href="${/^https?:\/\//i.test(h.link || "") ? esc(h.link) : "#"}" target="_blank" rel="noopener noreferrer">${esc(h.title)}</a>
-      <div class="muted">${esc(h.source)} · ${localTime(h.time)} · ${esc(h.reason)}</div></td></tr>`).join("");
-    $("#tab-news").innerHTML = `<p class="muted">News bias: ${biasText(n.bias)} · analysed by ${esc(n.model)}</p>
-      <div class="table-scroll"><table><tbody>${rows || '<tr><td class="muted">No headlines loaded (check internet connection).</td></tr>'}</tbody></table></div>`;
+      <div class="muted">${esc(h.source)} · ${localTime(h.time)} · ${esc(tr(I18N.lang === "id" && h.reason_id ? h.reason_id : h.reason))}</div></td></tr>`).join("");
+    $("#tab-news").innerHTML = `<p class="muted">${t("news_bias", { b: biasText(n.bias), m: esc(n.model) })}</p>
+      <div class="table-scroll"><table><tbody>${rows || `<tr><td class="muted">${t("no_headlines")}</td></tr>`}</tbody></table></div>`;
   }
 
   function renderCalendar(events) {
-    const rows = events.map((e) => `<tr><td>${localTime(e.time)}</td><td><span class="pill ${e.impact}">${e.impact}</span></td>
-      <td>${esc(e.title)}</td><td class="muted">F: ${esc(e.forecast) || "—"} · P: ${esc(e.previous) || "—"}</td></tr>`).join("");
-    $("#tab-calendar").innerHTML = `<p class="muted">USD events. New signals are blocked 30 minutes before and after High-impact news.</p>
-      <div class="table-scroll"><table><thead><tr><th>Time</th><th>Impact</th><th>Event</th><th>Forecast / Previous</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="4" class="muted">No upcoming events loaded.</td></tr>'}</tbody></table></div>`;
+    const rows = events.map((e) => `<tr><td>${localTime(e.time)}</td><td><span class="pill ${e.impact}">${t(`impact_${e.impact}`)}</span></td>
+      <td>${esc(e.title)}</td><td class="muted">${esc(t("cal_fp", { f: e.forecast || "—", p: e.previous || "—" }))}</td></tr>`).join("");
+    $("#tab-calendar").innerHTML = `<p class="muted">${t("cal_intro")}</p>
+      <div class="table-scroll"><table><thead><tr><th>${t("th_time")}</th><th>${t("th_impact")}</th><th>${t("th_event")}</th><th>${t("th_fp")}</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="4" class="muted">${t("no_events")}</td></tr>`}</tbody></table></div>`;
   }
 
   function statRow(name, s) {
-    if (!s || !s.trades) return `<tr><td>${esc(name)}</td><td>${s ? s.signals : 0}</td><td colspan="6" class="muted">no filled trades</td></tr>`;
+    if (!s || !s.trades) return `<tr><td>${esc(name)}</td><td>${s ? s.signals : 0}</td><td colspan="6" class="muted">${t("bt_no_fills")}</td></tr>`;
     const cls = s.total_r >= 0 ? "pos" : "neg";
     return `<tr><td>${esc(name)}</td><td>${s.signals}</td><td>${s.trades}</td><td>${fmt(s.win_rate_tp1, 1)}%</td>
-      <td>${fmt(s.full_losses_pct, 1)}%</td><td class="${cls}">${fmt(s.avg_r, 2)}R</td><td class="${cls}">${fmt(s.total_r, 1)}R</td>
+      <td>${s.full_losses_pct == null ? "—" : fmt(s.full_losses_pct, 1) + "%"}</td><td class="${cls}">${fmt(s.avg_r, 2)}R</td><td class="${cls}">${fmt(s.total_r, 1)}R</td>
       <td>${s.profit_factor ?? "—"}</td></tr>`;
   }
 
-  async function runBacktest() {
+  function renderBacktest() {
     const out = $("#bt");
-    out.innerHTML = '<p class="muted">Running…</p>';
-    try {
-      const r = await api("/api/backtest");
-      state.trades = r.trades;
-      setMarkers();
-      const s = r.stats;
-      const head = "<tr><th></th><th>Signals</th><th>Trades</th><th>Win rate (TP1)</th><th>Full losses</th><th>Avg</th><th>Total</th><th>Profit factor</th></tr>";
-      const grades = ["all", "A+", "A", "B"].map((g) => statRow(g === "all" ? "All signals" : `Grade ${g}`, s[g])).join("");
-      const strat = Object.entries(s.by_strategy).map(([k, v]) => statRow(k, v)).join("");
-      const m = state.ml;
-      const mlHtml = m ? `<h3 style="margin-top:14px">ML model — test on unseen data (${new Date(m.test_period_from).toLocaleDateString()} → ${new Date(m.data_to).toLocaleDateString()})</h3>
-        <div class="table-scroll"><table><thead>${head}</thead><tbody>
-        ${statRow("All candidates", { signals: m.test_all_candidates.trades, ...m.test_all_candidates, full_losses_pct: null })}
-        ${statRow("Approved by model", { signals: m.test_model_approved.trades, ...m.test_model_approved, full_losses_pct: null })}
-        </tbody></table></div><p class="muted">AUC ${m.test_auc ?? "—"} (0.5 = no skill) · threshold ${fmt(m.threshold * 100, 0)}% · trained on ${m.candidates} candidate trades.</p>` :
-        `<p class="muted">No ML model trained yet. Run <code>python -m backend.app.ml --csv your_history.csv</code>.</p>`;
-      out.innerHTML = `
-        <p class="muted">${new Date(r.start).toLocaleDateString()} → ${new Date(r.end).toLocaleDateString()} · ${r.bars} candles · max drawdown ${fmt(s.all.max_drawdown_r, 1)}R.
-        Arrows on the chart show each trade. Results include spread; news filters are not applied in backtests.</p>
-        <div class="table-scroll"><table><thead>${head}</thead><tbody>${grades}</tbody></table></div>
-        ${mlHtml}
-        <h3 style="margin-top:14px">By strategy (trades where it agreed)</h3>
-        <div class="table-scroll"><table><thead>${head}</thead><tbody>${strat}</tbody></table></div>`;
-    } catch (e) {
-      out.innerHTML = `<p class="muted">Backtest failed: ${esc(e.message)}</p>`;
+    if (state.backtestError) {
+      out.innerHTML = `<p class="muted">${esc(t("bt_failed", { msg: state.backtestError }))}</p>`;
+      return;
     }
+    const r = state.backtest;
+    if (!r) return;
+    const s = r.stats;
+    const head = `<tr><th></th><th>${t("th_signals")}</th><th>${t("th_trades")}</th><th>${t("th_winrate")}</th><th>${t("th_full_losses")}</th>
+      <th>${t("th_avg")}</th><th>${t("th_total")}</th><th>${t("th_pf")}</th></tr>`;
+    const grades = ["all", "A+", "A", "B"].map((g) => statRow(g === "all" ? t("bt_all") : t("bt_grade", { g }), s[g])).join("");
+    const names = Object.fromEntries(((state.status && state.status.strategies) || []).map((x) => [x.name, x]));
+    const strat = Object.entries(s.by_strategy).map(([k, v]) => {
+      const info = names[k];
+      return statRow(info ? I18N.strategy(k, info.label, info.description).label : k, v);
+    }).join("");
+    const m = state.status && state.status.ml_model;
+    const mlHtml = m ? `<h3 style="margin-top:14px">${esc(t("ml_heading", { a: localDate(m.test_period_from), b: localDate(m.data_to) }))}</h3>
+      <div class="table-scroll"><table><thead>${head}</thead><tbody>
+      ${statRow(t("ml_all"), { signals: m.test_all_candidates.trades, ...m.test_all_candidates, full_losses_pct: null })}
+      ${statRow(t("ml_approved"), { signals: m.test_model_approved.trades, ...m.test_model_approved, full_losses_pct: null })}
+      </tbody></table></div><p class="muted">${esc(t("ml_note", { auc: m.test_auc ?? "—", t: fmt(m.threshold * 100, 0), n: m.candidates }))}</p>` :
+      `<p class="muted">${t("ml_none")}</p>`;
+    out.innerHTML = `
+      <p class="muted">${esc(t("bt_summary", { a: localDate(r.start), b: localDate(r.end), n: r.bars, dd: fmt(s.all.max_drawdown_r, 1) }))}</p>
+      <div class="table-scroll"><table><thead>${head}</thead><tbody>${grades}</tbody></table></div>
+      ${mlHtml}
+      <h3 style="margin-top:14px">${t("bt_by_strategy")}</h3>
+      <div class="table-scroll"><table><thead>${head}</thead><tbody>${strat}</tbody></table></div>`;
+  }
+
+  async function runBacktest() {
+    $("#bt").innerHTML = `<p class="muted">${t("bt_running")}</p>`;
+    try {
+      state.backtest = await api("/api/backtest");
+      state.backtestError = null;
+      state.trades = state.backtest.trades;
+      setMarkers();
+    } catch (e) {
+      state.backtestError = e.message;
+    }
+    renderBacktest();
+  }
+
+  function renderStatus() {
+    const st = state.status;
+    if (!st) return;
+    const mlText = st.ml_model ? t("src_ml_on", { w: st.ml_model.test_model_approved.win_rate_tp1 ?? "—" }) : t("src_ml_off");
+    const aiText = st.ai_provider ? t("src_ai", { p: st.ai_provider, m: st.ai_signal_mode }) : t("src_ai_off");
+    $("#source").textContent = `${t("src_data", { p: st.provider })} · ${aiText} · ${mlText}`;
+  }
+
+  // fixed texts in the HTML (elements with data-i18n="key")
+  function renderStatic() {
+    document.documentElement.lang = I18N.lang;
+    document.querySelectorAll("[data-i18n]").forEach((node) => { node.textContent = t(node.dataset.i18n); });
+    document.querySelectorAll(".lang button").forEach((b) => b.classList.toggle("active", b.dataset.lang === I18N.lang));
+  }
+
+  function renderAll() {
+    renderStatic();
+    renderStatus();
+    renderAnalysis();
+    renderNews();
+    renderBacktest();
   }
 
   // ------------------------------------------------------------------ UI events
@@ -380,20 +451,18 @@
   }));
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
-    document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.id === `tab-${b.dataset.tab}`));
+    document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.id === `tab-${b.dataset.tab}`));
+  }));
+  document.querySelectorAll(".lang button").forEach((b) => b.addEventListener("click", () => {
+    I18N.setLang(b.dataset.lang);
+    renderAll();
   }));
   $("#run-bt").addEventListener("click", runBacktest);
 
   // ------------------------------------------------------------------ start
   (async () => {
-    try {
-      const st = await api("/api/status");
-      strategyList = st.strategies;
-      state.ml = st.ml_model;
-      const mlText = st.ml_model ? `ML filter on (test win rate ${st.ml_model.test_model_approved.win_rate_tp1 ?? "—"}%)` : "ML filter off";
-      const aiText = st.ai_provider ? `AI: ${st.ai_provider} (${st.ai_signal_mode})` : "AI: off (no API key)";
-      $("#source").textContent = `Data: ${st.provider} · ${aiText} · ${mlText}`;
-    } catch (_) { /* shown elsewhere */ }
+    renderStatic();
+    await loadStatus();
     await loadCandles(true);
     await loadAnalysis();
     loadNews();
