@@ -41,7 +41,8 @@ uvicorn backend.app.main:app --port 8000
 | `AI_MODEL` | Claude model, default `claude-opus-5-5` |
 | `AI_EFFORT` | how hard Claude thinks per decision: `low`, `medium` (default), `high` |
 | `DEEPSEEK_API_KEY` | key for DeepSeek (platform.deepseek.com) |
-| `DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL` | default `deepseek-v4-flash` and `https://api.deepseek.com`; check DeepSeek's docs for current model names |
+| `DEEPSEEK_MODEL` | `deepseek-flash` (default, fast and cheap) or `deepseek-v4-pro` (stronger, more expensive) |
+| `DEEPSEEK_BASE_URL` | default `https://api.deepseek.com` |
 | `AI_SIGNAL_MODE` | `review` (default): the AI checks every strategy signal · `full`: the AI may also find its own trades · `off` |
 | `ACCOUNT_BALANCE`, `RISK_PERCENT` | used for the lot-size calculator (default $1000, 1%) |
 | `SPREAD` | spread in $ added to stop losses and charged in backtests (default 0.30) |

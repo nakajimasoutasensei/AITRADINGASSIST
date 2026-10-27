@@ -110,11 +110,19 @@ def _deepseek(system: str, user: str, schema: dict, max_tokens: int) -> dict:
     url = settings.deepseek_base_url.rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {settings.deepseek_api_key}", "Content-Type": "application/json"}
     last_error = "no answer"
-    for _ in range(2):  # DeepSeek can occasionally return empty content: retry once
+    attempts = 0
+    while attempts < 2:  # DeepSeek can occasionally return empty content: retry once
+        attempts += 1
         try:
             r = requests.post(url, headers=headers, json=body, timeout=180)
         except requests.RequestException as e:
             raise LLMError(f"DeepSeek network error: {e}") from e
+        if r.status_code == 400 and "response_format" in r.text and "response_format" in body:
+            # some models (e.g. thinking models) may not accept JSON mode: ask again without it;
+            # the prompt still asks for JSON and the answer is still checked against the schema
+            body.pop("response_format")
+            attempts -= 1
+            continue
         if r.status_code != 200:
             detail = r.text[:300]
             hint = " (check DEEPSEEK_MODEL in .env)" if r.status_code in (400, 404) and "model" in detail.lower() else ""

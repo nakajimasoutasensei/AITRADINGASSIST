@@ -26,7 +26,7 @@ class Settings:
     ai_provider: str = os.getenv("AI_PROVIDER", "auto").strip().lower()
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "").strip()
     deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "").strip()
-    deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash").strip()
+    deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-flash").strip()
     deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip()
     claude_model: str = os.getenv("AI_MODEL", "claude-opus-5-5").strip()
     claude_effort: str = os.getenv("AI_EFFORT", "medium").strip().lower()

@@ -134,3 +134,18 @@ def test_deepseek_scores_news(deepseek, monkeypatch):
     out = sentiment.analyze([{"id": "h1", "title": "Yields jump", "time": "2026-10-20T10:00:00+00:00"}])
     assert out[0]["impact"] == "bearish" and out[0]["model"] == "deepseek"
     assert out[0]["strength"] == pytest.approx(2 / 3)
+
+
+def test_deepseek_without_json_mode_support(deepseek):
+    deepseek.script = [(400, "response_format type json_object is not supported for this model"),
+                       (200, json.dumps(VERDICT))]
+    v = an.ask_ai({"price": 100})
+    assert v["action"] == "BUY"
+    assert "response_format" in deepseek.seen[0]["body"] and "response_format" not in deepseek.seen[1]["body"]
+
+
+def test_default_deepseek_model():
+    from backend.app.config import Settings
+    import os
+    if "DEEPSEEK_MODEL" not in os.environ:
+        assert Settings().deepseek_model == "deepseek-flash"
